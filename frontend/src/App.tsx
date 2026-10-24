@@ -43,6 +43,7 @@ function currentRoute(): Route {
   if (parts[0] === "verify-email") return { path: "verify-email", token };
   if (parts[0] === "reset-password") return { path: "reset-password", token };
   if (parts[0] === "how-it-works" || parts[0] === "trust") return { path: parts[0] };
+  if (["dashboard", "disputes", "activity", "settings"].includes(parts[0])) return { path: parts[0] };
   if (parts[0] === "owner") return { path: parts[1] ? `owner/${parts[1]}` : "owner" };
   if (parts[0] === "equipment") return parts[1] ? { path: "equipment/detail", id: parts[1] } : { path: "equipment" };
   if (parts[0] === "rentals" && parts[1]?.split("?")[0] === "create") return { path: "rentals/create" };
@@ -300,14 +301,14 @@ export default function App() {
           {route.path === "rentals/completed" && <RentalsPage onNavigate={navigate} filter="completed" />}
           {route.path === "rentals/create" && <CreateRentalPage contract={contract} onNavigate={navigate} />}
           {route.path === "rentals/detail" && <RentalDetailsPage contract={contract} rentalId={route.id ?? "1"} address={address} chainId={chainId} onNavigate={navigate} />}
-          {route.path === "disputes" && <DisputesPage />}
-          {route.path === "activity" && <ActivityPage />}
+          {route.path === "disputes" && <DisputesPage onNavigate={navigate} />}
+          {route.path === "activity" && <ActivityPage onNavigate={navigate} />}
             {route.path === "owner" && <OwnerWorkspacePage contract={contract} chainId={chainId} onNavigate={navigate} section="overview" />}
             {route.path === "owner/equipment" && <OwnerWorkspacePage contract={contract} chainId={chainId} onNavigate={navigate} section="equipment" />}
             {route.path === "owner/add-equipment" && <OwnerWorkspacePage contract={contract} chainId={chainId} onNavigate={navigate} section="add-equipment" />}
             {route.path === "owner/rentals" && <OwnerWorkspacePage contract={contract} chainId={chainId} onNavigate={navigate} section="bookings" />}
             {route.path === "owner/returns" && <OwnerWorkspacePage contract={contract} chainId={chainId} onNavigate={navigate} section="returns" />}
-           {route.path === "settings" && <EmptyPage eyebrow="WORKSPACE" title="Settings" description="Workspace preferences will appear here." note="Settings are visual only for now." />}
+           {route.path === "settings" && <SettingsPage user={authUser} address={address} chainId={chainId} walletStatus={walletStatus} onSignOut={() => void signOut()} />}
            {route.path === "not-found" && <EmptyPage eyebrow="PAGE NOT FOUND" title="That route does not exist." description="EventRent could not find the page you requested." note="Return to the marketplace or go back to your workspace." />}
           <p className="wallet-status">{walletStatus}{chainId ? ` · Chain ${chainId.toString()}` : ""} · {authStatus}</p>
         </main>
@@ -529,8 +530,39 @@ function RentalDetailsPage({ contract, rentalId, address, chainId, onNavigate }:
   return <PageHeader eyebrow="RENTAL RECORD" title={`Rental #${rentalId}`} description="Track the equipment, dates, and deposit settlement in one place."><button className="button-text back-link" onClick={() => onNavigate("rentals")}>← Back to my rentals</button><button className="button-text refresh-button" onClick={() => setRefresh((value) => value + 1)}>↻ Refresh rental</button><RentalLookup key={refresh} contract={contract} initialRentalId={rentalId} detailOnly chainId={chainId} contractAddress={contractAddress} onRentalLoaded={setRental} /><RentalActions contract={contract} rental={rental} address={address} chainId={chainId} onComplete={() => setRefresh((value) => value + 1)} /></PageHeader>;
 }
 
-function DisputesPage() { return <PageHeader eyebrow="RESOLUTION CENTER" title="Something went wrong?" description="If equipment condition or deposit settlement is disputed, the rental can enter a review state."><section className="content-panel"><EmptyState title="No active disputes" note="Your rentals are currently clear. Dispute records will appear here once event indexing is implemented." /></section></PageHeader>; }
-function ActivityPage() { return <PageHeader eyebrow="TRUST RECORD" title="Blockchain activity" description="Technical transaction details live here when you need to verify a rental milestone."><section className="content-panel"><EmptyState title="No activity indexed" note="Only real contract events will appear here. Event indexing is not implemented yet, so no transactions are fabricated." /></section></PageHeader>; }
+function DisputesPage({ onNavigate }: { onNavigate: (path: string) => void }) {
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  async function reload() {
+    setLoading(true);
+    setError("");
+    try { setBookings(await fetchBookings()); }
+    catch (reason) { setError(reason instanceof Error && reason.message === "authentication_required" ? "Sign in to view disputes." : "Dispute records could not be loaded."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { void reload(); }, []);
+  const disputes = bookings.filter((booking) => booking.onchainRentalStatus === "DISPUTED" || booking.onchainRentalStatus === "RESOLVED");
+  return <PageHeader eyebrow="RESOLUTION CENTER" title="Something went wrong?" description="Review rentals whose deposit settlement entered a dispute path. Contract state remains authoritative."><section className="content-panel"><PanelHeading title="Dispute records" action="Refresh" onAction={() => void reload()} />{loading ? <div className="empty-state"><strong>Loading dispute records...</strong><p>Reading persisted booking and escrow snapshots.</p></div> : error ? <div className="empty-state"><strong>{error}</strong><button className="outline-button" onClick={() => void reload()}>Try again</button></div> : disputes.length ? <div className="booking-list">{disputes.map((booking) => <article className="booking-row" key={booking.id}><div><span className="card-kicker">Booking #{booking.id}</span><h3>{booking.name}</h3><p>{new Date(booking.startTime).toLocaleString()} – {new Date(booking.endTime).toLocaleString()}</p></div><div><strong>{booking.onchainRentalStatus}</strong><small>{booking.onchainRentalId ? `Rental #${booking.onchainRentalId} · ${booking.onchainVerificationStatus || "UNVERIFIED"}` : "No verified escrow record"}</small>{booking.onchainRentalId && <button className="button-text" onClick={() => onNavigate(`rentals/${booking.onchainRentalId}`)}>Open rental →</button>}</div></article>)}</div> : <EmptyState title="No active disputes" note="Your rentals are currently clear. A persisted escrow snapshot will appear here when a rental enters DISPUTED or RESOLVED state." />}</section></PageHeader>;
+}
+function ActivityPage({ onNavigate }: { onNavigate: (path: string) => void }) {
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  async function reload() {
+    setLoading(true);
+    setError("");
+    try { setBookings(await fetchBookings()); }
+    catch (reason) { setError(reason instanceof Error && reason.message === "authentication_required" ? "Sign in to view activity." : "Blockchain activity could not be loaded."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { void reload(); }, []);
+  const activity = bookings.filter((booking) => Boolean(booking.onchainRentalId || booking.transactionHash));
+  return <PageHeader eyebrow="TRUST RECORD" title="Blockchain activity" description="Review only transaction records that EventRent has persisted after backend verification. No activity is fabricated in this view."><section className="content-panel"><PanelHeading title="Verified escrow activity" action="Refresh" onAction={() => void reload()} />{loading ? <div className="empty-state"><strong>Loading activity...</strong><p>Reading verified transaction metadata.</p></div> : error ? <div className="empty-state"><strong>{error}</strong><button className="outline-button" onClick={() => void reload()}>Try again</button></div> : activity.length ? <div className="booking-list">{activity.map((booking) => <article className="booking-row" key={booking.id}><div><span className="card-kicker">Booking #{booking.id} · {booking.onchainVerificationStatus || "UNVERIFIED"}</span><h3>{booking.name}</h3><p>{booking.transactionHash || "Transaction hash unavailable"}</p></div><div><strong>{booking.onchainRentalStatus || "CREATED"}</strong><small>{booking.onchainRentalId ? `Rental #${booking.onchainRentalId} · Chain ${booking.chainId ?? "?"}` : "Pending transaction association"}</small>{booking.onchainRentalId && <button className="button-text" onClick={() => onNavigate(`rentals/${booking.onchainRentalId}`)}>Open rental →</button>}</div></article>)}</div> : <EmptyState title="No verified blockchain activity yet" note="Create an approved escrow rental and let the backend verify its transaction before it appears here." />}</section></PageHeader>;
+}
+function SettingsPage({ user, address, chainId, walletStatus, onSignOut }: { user: AuthUser | null; address: string; chainId: bigint | null; walletStatus: string; onSignOut: () => void }) {
+  return <PageHeader eyebrow="WORKSPACE" title="Account settings" description="Review the authenticated account and current wallet connection. Sensitive credentials and private keys are never shown here."><div className="info-page-grid"><section className="info-card"><span>ACCOUNT</span><h2>{user?.email || "Wallet account"}</h2><p>User ID: {user?.id ?? "Unavailable"}<br />Roles: {user?.roles?.join(", ") || "None selected"}<br />Email verification: {user?.emailVerified ? "Verified" : "Wallet-authenticated"}</p></section><section className="info-card"><span>WALLET</span><h2>{address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "Not connected"}</h2><p>{walletStatus}<br />Chain: {chainId?.toString() || "Unavailable"}<br />Contract actions require the configured local escrow and the expected network.</p></section></div><section className="content-panel account-actions"><PanelHeading title="Session" /><p className="auth-intro">Signing out clears the server session. Reconnect and sign a fresh wallet challenge to authenticate again.</p><button className="button-primary" onClick={onSignOut}>Sign out</button></section></PageHeader>;
+}
 function HowItWorksPage() { return <PageHeader eyebrow="HOW IT WORKS" title="A normal rental, with a clearer deposit." description="The contract handles the deposit rules underneath. You can focus on the equipment and the event."><div className="info-page-grid">{["Choose equipment", "Agree the rental", "Protect the deposit", "Return and settle"].map((title, index) => <article className="info-card" key={title}><span>0{index + 1}</span><h2>{title}</h2><p>{["Browse the gear your event needs.", "Set the renter, dates, rental fee, and deposit.", "The security deposit stays in escrow until settlement.", "The right person can approve, dispute, or withdraw according to the rental state."][index]}</p></article>)}</div></PageHeader>; }
 function TrustPage() { return <PageHeader eyebrow="TRUST & TRANSPARENCY" title="What is protected, and what is not." description="EventRent makes the financial rules visible without pretending a smart contract can inspect physical equipment."><div className="trust-grid"><section className="info-card"><h2>Protected by the contract</h2><p>Rental terms, deposit custody, lifecycle transitions, dispute settlement, and claimable withdrawals are controlled by RentalEscrow.</p></section><section className="info-card"><h2>Still agreed by people</h2><p>Equipment condition, handover, damage evidence, and the rental fee are real-world responsibilities. The current contract escrows only the security deposit.</p></section></div></PageHeader>; }
 
