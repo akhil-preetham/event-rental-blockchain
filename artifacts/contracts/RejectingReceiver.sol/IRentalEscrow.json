@@ -1,0 +1,47 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "IRentalEscrow",
+  "sourceName": "contracts/RejectingReceiver.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "rentalId",
+          "type": "uint256"
+        }
+      ],
+      "name": "fundDeposit",
+      "outputs": [],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "rentalId",
+          "type": "uint256"
+        }
+      ],
+      "name": "markReturned",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "withdraw",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/RejectingReceiver.sol",
+  "buildInfoId": "solc-0_8_28-dc7e3d73b4399ea8d3b27467e8d6418a1a9569bf"
+}
