@@ -7,7 +7,7 @@ import { test } from "node:test";
 import express from "express";
 import http from "node:http";
 import { Wallet } from "ethers";
-import { createAuthRouter } from "./auth.js";
+import { createLegacyEmailAuthRouter } from "./auth.js";
 import { openAuthDatabase } from "./db.js";
 
 async function startTestServer() {
@@ -15,7 +15,7 @@ async function startTestServer() {
   const verificationTokens: string[] = [];
   const app = express();
   app.use(express.json());
-  app.use("/auth", createAuthRouter(database, async (_email, url) => {
+  app.use("/auth", createLegacyEmailAuthRouter(database, async (_email, url) => {
     verificationTokens.push(url.match(/[?&]token=([^&]+)/)?.[1] || "");
   }));
   const server = http.createServer(app);
@@ -177,7 +177,7 @@ test("restores an email session after reopening the SQLite database", async () =
   const firstApp = express();
   firstApp.use(express.json());
   const firstTokens: string[] = [];
-  firstApp.use("/auth", createAuthRouter(first, async (_email, url) => { firstTokens.push(url.match(/[?&]token=([^&]+)/)?.[1] || ""); }));
+  firstApp.use("/auth", createLegacyEmailAuthRouter(first, async (_email, url) => { firstTokens.push(url.match(/[?&]token=([^&]+)/)?.[1] || ""); }));
   const firstServer = http.createServer(firstApp);
   await new Promise<void>((resolve) => firstServer.listen(0, "127.0.0.1", resolve));
   const firstAddress = firstServer.address();
@@ -192,7 +192,7 @@ test("restores an email session after reopening the SQLite database", async () =
   const second = openAuthDatabase(databasePath);
   const secondApp = express();
   secondApp.use(express.json());
-  secondApp.use("/auth", createAuthRouter(second, async () => undefined));
+  secondApp.use("/auth", createLegacyEmailAuthRouter(second, async () => undefined));
   const secondServer = http.createServer(secondApp);
   await new Promise<void>((resolve) => secondServer.listen(0, "127.0.0.1", resolve));
   const secondAddress = secondServer.address();

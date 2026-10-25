@@ -36,7 +36,7 @@ export function BookingForm({ listingId, dailyFee, deposit, onCreated }: Booking
       const code = error instanceof Error ? error.message : "request_failed";
       const messages: Record<string, string> = {
         authentication_required: "Sign in before requesting a booking.",
-        owner_cannot_book_own_listing: "You cannot book your own listing.",
+        owner_cannot_book_own_listing: "This is your equipment listing. Manage it from the owner workspace.",
         dates_unavailable: "Those dates are no longer available.",
         listing_not_available: "This listing is no longer active.",
       };

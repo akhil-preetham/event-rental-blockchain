@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import http from "node:http";
 import { network } from "hardhat";
-import { createAuthRouter } from "../backend/auth.js";
+import { createLegacyEmailAuthRouter } from "../backend/auth.js";
 import { openAuthDatabase } from "../backend/db.js";
 import { createMarketplaceRouter } from "../backend/marketplace.js";
 import { createRentalVerifier } from "../backend/blockchain.js";
@@ -27,7 +27,7 @@ describe("EventRent backend-to-chain local flow", function () {
     const verificationTokens: string[] = [];
     const app = express();
     app.use(express.json());
-    app.use("/auth", createAuthRouter(database, async (_email, url) => {
+    app.use("/auth", createLegacyEmailAuthRouter(database, async (_email, url) => {
       verificationTokens.push(url.match(/[?&]token=([^&]+)/)?.[1] || "");
     }));
     app.use("/api", createMarketplaceRouter(database, {
@@ -75,7 +75,7 @@ describe("EventRent backend-to-chain local flow", function () {
       const listingResponse = await request("/api/listings", {
         method: "POST",
         headers: { cookie: ownerCookie },
-        body: JSON.stringify({ name: "E2E Camera", category: "Capture", description: "Local integration camera", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "E2E pickup" }),
+        body: JSON.stringify({ serialId: "E2E-CAMERA-001", name: "E2E Camera", category: "Capture", description: "Local integration camera", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "E2E pickup" }),
       });
       assert.equal(listingResponse.status, 201);
       const listingId = (await listingResponse.json() as { listingId: number }).listingId;

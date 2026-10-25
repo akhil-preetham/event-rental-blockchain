@@ -93,7 +93,11 @@ function rejectCrossOrigin(request: express.Request, response: express.Response)
   return false;
 }
 
-export function createAuthRouter(database: AuthDatabase, mailer: VerificationMailer = createVerificationMailer()): express.Router {
+/**
+ * Retained only for compatibility with the historical test fixtures. The
+ * application server mounts createAuthRouter below, not this legacy router.
+ */
+export function createLegacyEmailAuthRouter(database: AuthDatabase, mailer: VerificationMailer = createVerificationMailer()): express.Router {
   const router = express.Router();
   const failedLogins = new Map<string, { count: number; resetAt: number }>();
   const abuseAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -282,6 +286,109 @@ export function createAuthRouter(database: AuthDatabase, mailer: VerificationMai
 
   router.post("/nonce", (request, response) => {
     if (abuseRateLimit(request, response, "wallet-nonce")) return;
+    const address = parseAddress(request.body?.address);
+    if (!address) {
+      response.status(400).json({ error: "invalid_address" });
+      return;
+    }
+    const nonce = randomToken(24);
+    const expiresAt = Date.now() + NONCE_TTL_MS;
+    const message = [`${configuredOrigin()} wants you to sign in to EventRent.`, "", "Sign in with your Ethereum account:", address, "", "This signature proves wallet ownership. It does not authorize a blockchain transaction.", `Nonce: ${nonce}`, `Issued At: ${new Date().toISOString()}`, `Expiration Time: ${new Date(expiresAt).toISOString()}`].join("\n");
+    database.db.prepare("DELETE FROM auth_nonces WHERE expires_at <= ?").run(Date.now());
+    database.db.prepare("INSERT INTO auth_nonces (nonce, address, message, expires_at) VALUES (?, ?, ?, ?)").run(nonce, address, message, expiresAt);
+    response.json({ nonce, message, expiresAt: new Date(expiresAt).toISOString() });
+  });
+
+  router.post("/verify", (request, response) => {
+    const address = parseAddress(request.body?.address);
+    const nonce = typeof request.body?.nonce === "string" ? request.body.nonce : "";
+    const signature = typeof request.body?.signature === "string" ? request.body.signature : "";
+    const record = database.db.prepare("SELECT nonce, address, message, expires_at AS expiresAt FROM auth_nonces WHERE nonce = ?").get(nonce) as { nonce: string; address: string; message: string; expiresAt: number } | undefined;
+    database.db.prepare("DELETE FROM auth_nonces WHERE nonce = ?").run(nonce);
+    if (!address || !signature || !record || record.expiresAt <= Date.now() || record.address.toLowerCase() !== address.toLowerCase()) {
+      response.status(401).json({ error: "invalid_or_expired_challenge" });
+      return;
+    }
+    try {
+      if (getAddress(verifyMessage(record.message, signature)).toLowerCase() !== address.toLowerCase()) throw new Error("invalid");
+    } catch {
+      response.status(401).json({ error: "invalid_signature" });
+      return;
+    }
+    let user = database.db.prepare("SELECT id FROM users WHERE wallet_address = ?").get(address) as { id: number } | undefined;
+    if (!user) {
+      const result = database.db.prepare("INSERT INTO users (wallet_address, email_verified, created_at) VALUES (?, 1, ?)").run(address, new Date().toISOString());
+      user = { id: Number(result.lastInsertRowid) };
+    }
+    const walletUser = findUser(database, user.id);
+    if (!walletUser) {
+      response.status(500).json({ error: "authentication_failed" });
+      return;
+    }
+    createSession(database, walletUser.id, response);
+    response.json({ authenticated: true, user: userResponse(walletUser) });
+  });
+
+  router.get("/session", (request, response) => {
+    const user = getSessionUser(database, request);
+    if (!user) {
+      response.status(401).json({ authenticated: false });
+      return;
+    }
+    response.json({ authenticated: true, user: userResponse(user) });
+  });
+
+  router.post("/role", (request, response) => {
+    const user = getSessionUser(database, request);
+    const role = request.body?.role;
+    if (!user) { response.status(401).json({ error: "authentication_required" }); return; }
+    if (role !== "renter" && role !== "owner") { response.status(400).json({ error: "invalid_role" }); return; }
+    database.db.prepare("INSERT OR IGNORE INTO user_roles (user_id, role, created_at) VALUES (?, ?, ?)").run(user.id, role as UserRole, new Date().toISOString());
+    const updatedUser = findUser(database, user.id);
+    if (!updatedUser) { response.status(500).json({ error: "authentication_failed" }); return; }
+    response.json({ user: userResponse(updatedUser) });
+  });
+
+  router.post("/logout", (request, response) => {
+    const token = cookieValue(request);
+    if (token) database.db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
+    clearSessionCookie(response);
+    response.json({ authenticated: false });
+  });
+
+  return router;
+}
+
+/**
+ * Authentication used by the running application. The local MVP intentionally
+ * exposes wallet authentication only so starting the backend never requires
+ * SMTP or email-verification configuration.
+ */
+export function createAuthRouter(database: AuthDatabase): express.Router {
+  const router = express.Router();
+  const abuseAttempts = new Map<string, { count: number; resetAt: number }>();
+
+  const abuseRateLimit = (request: express.Request, response: express.Response): boolean => {
+    const key = `${request.path}:${request.ip}`;
+    const now = Date.now();
+    const current = abuseAttempts.get(key);
+    if (current && current.resetAt > now && current.count >= 10) {
+      response.status(429).json({ error: "too_many_requests" });
+      return true;
+    }
+    if (!current || current.resetAt <= now) abuseAttempts.set(key, { count: 1, resetAt: now + 15 * 60 * 1000 });
+    else current.count += 1;
+    return false;
+  };
+
+  router.use((request, response, next) => {
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method === "POST" && rejectCrossOrigin(request, response)) return;
+    next();
+  });
+
+  router.post("/nonce", (request, response) => {
+    if (abuseRateLimit(request, response)) return;
     const address = parseAddress(request.body?.address);
     if (!address) {
       response.status(400).json({ error: "invalid_address" });

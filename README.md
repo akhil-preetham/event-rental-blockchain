@@ -76,7 +76,6 @@ Set the same address in the backend process:
 
 ```powershell
 $env:NODE_ENV="development"
-$env:EMAIL_DELIVERY_MODE="console"
 $env:RENTAL_ESCROW_ADDRESS="0x..."
 $env:BLOCKCHAIN_RPC_URL="http://127.0.0.1:8545"
 $env:BLOCKCHAIN_CHAIN_ID="31337"
@@ -96,7 +95,7 @@ npm run dev --prefix frontend
 
 Open `http://localhost:5173`. Port `8787` is the backend API, not the website.
 
-Console email mode prints verification and reset links in the backend terminal. It is rejected when `NODE_ENV=production`.
+The backend uses wallet challenge authentication only; no SMTP or email account is needed.
 
 ## Tests and checks
 
@@ -114,12 +113,12 @@ The Solidity tests use an isolated Hardhat network. Backend tests use isolated d
 ## Demonstration journey
 
 1. Start Hardhat and deploy the contract.
-2. Import two disposable Hardhat accounts into MetaMask and select chain `31337`.
-3. Start the backend in console email mode and start Vite.
-4. Register a test account and open the verification URL printed by the backend.
-5. Connect MetaMask and complete wallet challenge authentication.
-6. Browse a seeded listing or create a listing.
-7. Submit a future booking request as a different account.
+2. Import two disposable Hardhat accounts into MetaMask. The frontend automatically adds or switches to chain `31337` when Connect MetaMask is clicked.
+3. Start the wallet-auth backend and Vite.
+4. Choose renter or owner, connect MetaMask, and approve the free wallet challenge signature.
+5. Create an owner listing with a unique serial ID and upload a clear item image; the marketplace starts empty and has no sample catalogue.
+6. Confirm the listing appears in the renter marketplace with its serial validation status and image.
+7. Submit a future booking request as a different wallet.
 8. Approve the request as the listing owner.
 9. Create the rental through the owner wallet.
 10. Confirm the backend accepts it only after independently checking the transaction, event, calldata, contract state, confirmations, and canonical block.
@@ -138,15 +137,14 @@ flowchart LR
   API --> SQLite[(SQLite)]
   Browser -->|MetaMask JSON-RPC| Chain[Hardhat :8545]
   API -->|verification and reconciliation RPC| Chain
-  API --> Mail[Console email or SMTP]
+  API --> Wallet[MetaMask wallet challenge]
 ```
 
 The backend does not trust browser transaction status. `PATCH /api/bookings/:id/onchain` verifies the local-chain transaction before persisting the association. Reconciliation re-reads the rental and checks the original receipt remains canonical.
 
 ## Trust model and limitations
 
-- Email/password sessions are server-issued HttpOnly cookies backed by hashed session tokens.
-- Wallet authentication requires a server-generated, expiring, single-use signed challenge.
+- Wallet authentication requires a server-generated, expiring, single-use signed challenge and creates an HttpOnly session cookie backed by a hashed session token.
 - The selected renter/owner capability is persisted through an authenticated endpoint; backend capability checks and ownership queries protect listing and booking mutations.
 - Contract calls enforce renter, owner, and arbitrator permissions independently.
 - The rental fee is stored as contract metadata; `RentalEscrow` only escrows the security deposit.
@@ -154,7 +152,7 @@ The backend does not trust browser transaction status. `PATCH /api/bookings/:id/
 - The current app has no background event indexer. Reconciliation is explicit and must be invoked after later lifecycle actions.
 - Local deployment is explicit: `scripts/deploy.ts` refuses to deploy by default, never edits address configuration, and will not replace a configured contract. Run `npm run inspect:chain -- --json` after starting or restarting Hardhat to detect stale addresses before using the demo.
 - RPC timeout handling is bounded, but the app is not a production-grade multi-node finality or reorganization service.
-- Login and abuse throttles are in-memory and suitable for one local process, not a multi-instance deployment.
+- Wallet-login and abuse throttles are in-memory and suitable for one local process, not a multi-instance deployment.
 
 ## Environment reference
 

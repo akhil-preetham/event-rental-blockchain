@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import express from "express";
 import http from "node:http";
-import { createAuthRouter } from "./auth.js";
+import { createLegacyEmailAuthRouter } from "./auth.js";
 import { openAuthDatabase } from "./db.js";
 import { createMarketplaceRouter } from "./marketplace.js";
 import type { OnchainRentalSnapshot, RentalVerifier } from "./blockchain.js";
@@ -12,7 +12,7 @@ async function startServer(verifyRental: RentalVerifier = async (expected) => ({
   const verificationTokens: string[] = [];
   const app = express();
   app.use(express.json());
-  app.use("/auth", createAuthRouter(database, async (_email, url) => { verificationTokens.push(url.match(/[?&]token=([^&]+)/)?.[1] || ""); }));
+  app.use("/auth", createLegacyEmailAuthRouter(database, async (_email, url) => { verificationTokens.push(url.match(/[?&]token=([^&]+)/)?.[1] || ""); }));
   app.use("/api", createMarketplaceRouter(database, { verifyRental, reconcileRental }));
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -55,7 +55,7 @@ test("creates a renter booking and restores it through the authenticated API", a
   try {
     const ownerCookie = await register(baseUrl, "owner@example.com", verificationTokens);
     const renterCookie = await register(baseUrl, "renter@example.com", verificationTokens);
-    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ serialId: "CAM-TEST-001", name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     assert.equal(listingResponse.status, 201);
     const listingId = (await listingResponse.json() as { listingId: number }).listingId;
     const bookingResponse = await request(baseUrl, "/api/bookings", { method: "POST", headers: { cookie: renterCookie }, body: JSON.stringify({ listingId, startTime: "2030-01-01T10:00:00.000Z", endTime: "2030-01-02T10:00:00.000Z" }) });
@@ -76,10 +76,10 @@ test("enforces persisted capabilities on protected marketplace mutations", async
     assert.equal(registration.status, 201);
     const verified = await request(baseUrl, "/auth/verify-email", { method: "POST", body: JSON.stringify({ token: verificationTokens[0] }) });
     const sessionCookie = cookie(verified);
-    const denied = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: sessionCookie }, body: JSON.stringify({ name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const denied = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: sessionCookie }, body: JSON.stringify({ serialId: "CAM-TEST-002", name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     assert.equal(denied.status, 403);
     assert.equal((await request(baseUrl, "/auth/role", { method: "POST", headers: { cookie: sessionCookie }, body: JSON.stringify({ role: "owner" }) })).status, 200);
-    const allowed = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: sessionCookie }, body: JSON.stringify({ name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const allowed = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: sessionCookie }, body: JSON.stringify({ serialId: "CAM-TEST-003", name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     assert.equal(allowed.status, 201);
   } finally {
     database.close();
@@ -94,11 +94,11 @@ test("rejects malformed cookies and amounts outside parseEther uint256 bounds", 
     assert.equal(malformed.status, 401);
 
     const ownerCookie = await register(baseUrl, "amount-owner@example.com", verificationTokens);
-    for (const dailyFee of ["Infinity", "1e309", `1${"0".repeat(80)}`]) {
+    for (const [index, dailyFee] of ["Infinity", "1e309", `1${"0".repeat(80)}`].entries()) {
       const invalid = await request(baseUrl, "/api/listings", {
         method: "POST",
         headers: { cookie: ownerCookie },
-        body: JSON.stringify({ name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee, deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
+        body: JSON.stringify({ serialId: `CAM-AMOUNT-${index}`, name: "Camera", category: "Capture", description: "A camera kit", condition: "Good", dailyFee, deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
       });
       assert.equal(invalid.status, 400);
       assert.deepEqual(await invalid.json(), { error: "invalid_listing" });
@@ -115,7 +115,7 @@ test("enforces booking ownership and supports approve/reject transitions", async
     const ownerCookie = await register(baseUrl, "owner2@example.com", verificationTokens);
     const renterCookie = await register(baseUrl, "renter2@example.com", verificationTokens);
     assignWallets(database, "owner2@example.com", "renter2@example.com");
-    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ name: "Projector", category: "Projection", description: "A projector", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ serialId: "PRJ-TEST-001", name: "Projector", category: "Projection", description: "A projector", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     const listingId = (await listingResponse.json() as { listingId: number }).listingId;
     const bookingResponse = await request(baseUrl, "/api/bookings", { method: "POST", headers: { cookie: renterCookie }, body: JSON.stringify({ listingId, startTime: "2030-02-01T10:00:00.000Z", endTime: "2030-02-02T10:00:00.000Z" }) });
     const bookingId = (await bookingResponse.json() as { bookingId: number }).bookingId;
@@ -147,7 +147,7 @@ test("does not record a transaction when verification fails and allows a later r
     const ownerCookie = await register(baseUrl, "retry-owner@example.com", verificationTokens);
     const renterCookie = await register(baseUrl, "retry-renter@example.com", verificationTokens);
     assignWallets(database, "retry-owner@example.com", "retry-renter@example.com");
-    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ name: "Microphone", category: "Sound", description: "A microphone", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ serialId: "MIC-TEST-001", name: "Microphone", category: "Sound", description: "A microphone", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     const listingId = (await listingResponse.json() as { listingId: number }).listingId;
     const bookingResponse = await request(baseUrl, "/api/bookings", { method: "POST", headers: { cookie: renterCookie }, body: JSON.stringify({ listingId, startTime: "2030-04-01T10:00:00.000Z", endTime: "2030-04-02T10:00:00.000Z" }) });
     const bookingId = (await bookingResponse.json() as { bookingId: number }).bookingId;
@@ -166,7 +166,7 @@ test("rejects overlaps at creation and allows only one concurrent request", asyn
   try {
     const ownerCookie = await register(baseUrl, "owner3@example.com", verificationTokens);
     const renterCookie = await register(baseUrl, "renter3@example.com", verificationTokens);
-    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ name: "Lights", category: "Lighting", description: "Stage lights", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const listingResponse = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ serialId: "LGT-TEST-001", name: "Lights", category: "Lighting", description: "Stage lights", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     const listingId = (await listingResponse.json() as { listingId: number }).listingId;
     const payload = JSON.stringify({ listingId, startTime: "2030-03-01T10:00:00.000Z", endTime: "2030-03-02T10:00:00.000Z" });
     const results = await Promise.all([
@@ -189,7 +189,7 @@ test("does not disclose inactive listings or another user's booking details", as
     const listingResponse = await request(baseUrl, "/api/listings", {
       method: "POST",
       headers: { cookie: ownerCookie },
-      body: JSON.stringify({ name: "Access test camera", category: "Capture", description: "Camera", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
+      body: JSON.stringify({ serialId: "ACC-TEST-001", name: "Access test camera", category: "Capture", description: "Camera", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
     });
     const listingId = (await listingResponse.json() as { listingId: number }).listingId;
     const bookingResponse = await request(baseUrl, "/api/bookings", {
@@ -216,7 +216,7 @@ test("allows only the listing owner to edit listing presentation and availabilit
     const listingResponse = await request(baseUrl, "/api/listings", {
       method: "POST",
       headers: { cookie: ownerCookie },
-      body: JSON.stringify({ name: "Editable camera", category: "Capture", description: "Original description", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
+      body: JSON.stringify({ serialId: "EDIT-TEST-001", name: "Editable camera", category: "Capture", description: "Original description", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
     });
     const listingId = (await listingResponse.json() as { listingId: number }).listingId;
 
@@ -252,7 +252,7 @@ test("supports complete listing edits and exposes persisted escrow state to both
     const ownerCookie = await register(baseUrl, "complete-owner@example.com", verificationTokens);
     const renterCookie = await register(baseUrl, "complete-renter@example.com", verificationTokens);
     assignWallets(database, "complete-owner@example.com", "complete-renter@example.com");
-    const created = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ name: "Original", category: "Capture", description: "Original description", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
+    const created = await request(baseUrl, "/api/listings", { method: "POST", headers: { cookie: ownerCookie }, body: JSON.stringify({ serialId: "FULL-TEST-001", name: "Original", category: "Capture", description: "Original description", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }) });
     const listingId = (await created.json() as { listingId: number }).listingId;
     const updated = await request(baseUrl, `/api/listings/${listingId}`, { method: "PUT", headers: { cookie: ownerCookie }, body: JSON.stringify({ category: "Video", condition: "Excellent", dailyFee: "0.02", deposit: "0.06", location: "Downtown", pickupDetails: "Bring ID", imageUrl: "https://example.test/camera.jpg" }) });
     assert.equal(updated.status, 200);
@@ -281,6 +281,44 @@ test("returns JSON for malformed marketplace identifiers", async () => {
     const response = await request(baseUrl, "/api/listings/not-a-number");
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: "invalid_listing_id" });
+  } finally {
+    database.close();
+    server.close();
+  }
+});
+
+test("requires a unique serial ID and exposes the uploaded item image to renters", async () => {
+  const { server, database, verificationTokens, baseUrl } = await startServer();
+  try {
+    const ownerCookie = await register(baseUrl, "serial-owner@example.com", verificationTokens);
+    const imageUrl = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/";
+    const created = await request(baseUrl, "/api/listings", {
+      method: "POST",
+      headers: { cookie: ownerCookie },
+      body: JSON.stringify({ serialId: "PHOTO-TEST-001", name: "Uploaded camera", category: "Capture", description: "Camera with proof image", imageUrl, condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
+    });
+    assert.equal(created.status, 201);
+    const listingId = (await created.json() as { listingId: number }).listingId;
+    const detail = await request(baseUrl, `/api/listings/${listingId}`);
+    const listing = (await detail.json() as { listing: { serialId: string; imageUrl: string } }).listing;
+    assert.equal(listing.serialId, "PHOTO-TEST-001");
+    assert.equal(listing.imageUrl, imageUrl);
+
+    const duplicate = await request(baseUrl, "/api/listings", {
+      method: "POST",
+      headers: { cookie: ownerCookie },
+      body: JSON.stringify({ serialId: "PHOTO-TEST-001", name: "Duplicate camera", category: "Capture", description: "Duplicate serial", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
+    });
+    assert.equal(duplicate.status, 409);
+    assert.deepEqual(await duplicate.json(), { error: "serial_id_already_registered" });
+
+    const missing = await request(baseUrl, "/api/listings", {
+      method: "POST",
+      headers: { cookie: ownerCookie },
+      body: JSON.stringify({ name: "Missing serial", category: "Capture", description: "Missing serial", condition: "Good", dailyFee: "0.01", deposit: "0.05", location: "Local pickup", pickupDetails: "Arrange pickup" }),
+    });
+    assert.equal(missing.status, 400);
+    assert.deepEqual(await missing.json(), { error: "invalid_serial_id" });
   } finally {
     database.close();
     server.close();

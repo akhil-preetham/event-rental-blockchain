@@ -4,7 +4,8 @@
   "description": "",
   "scripts": {
     "test": "hardhat test",
-    "test:auth": "tsx --test backend/auth.test.ts",
+    "test:auth": "tsx --test backend/wallet-auth.test.ts",
+    "test:legacy-auth": "tsx --test backend/auth.test.ts",
     "test:blockchain": "tsx --test backend/blockchain.test.ts",
     "test:marketplace": "tsx --test backend/marketplace.test.ts",
     "test:e2e": "hardhat test test/backend-blockchain-verification.ts test/backend-marketplace-e2e.ts",

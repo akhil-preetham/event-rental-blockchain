@@ -20,6 +20,9 @@ export async function connectWallet(): Promise<{
   chainId: bigint;
 }> {
   const ethereum = requireEthereum();
+  // One click should get a local tester from MetaMask to the network expected
+  // by the app. Hardhat Local is added automatically when it is not present.
+  await switchToHardhatLocal();
   try {
     await ethereum.request({ method: "eth_requestAccounts" });
   } catch (error) {

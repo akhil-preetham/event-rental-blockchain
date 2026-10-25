@@ -56,6 +56,7 @@ export function openAuthDatabase(databasePath = process.env.AUTH_DB_PATH || path
       category TEXT NOT NULL,
       description TEXT NOT NULL,
       image_url TEXT,
+      equipment_serial TEXT,
       condition TEXT NOT NULL,
       daily_fee TEXT NOT NULL,
       deposit TEXT NOT NULL,
@@ -105,6 +106,8 @@ export function openAuthDatabase(databasePath = process.env.AUTH_DB_PATH || path
   const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
   if (!userColumns.some((column) => column.name === "email_verified")) db.exec("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0");
   const bookingColumns = db.prepare("PRAGMA table_info(bookings)").all() as Array<{ name: string }>;
+  const listingColumns = db.prepare("PRAGMA table_info(listings)").all() as Array<{ name: string }>;
+  if (!listingColumns.some((column) => column.name === "equipment_serial")) db.exec("ALTER TABLE listings ADD COLUMN equipment_serial TEXT");
   if (!bookingColumns.some((column) => column.name === "chain_id")) db.exec("ALTER TABLE bookings ADD COLUMN chain_id INTEGER");
   if (!bookingColumns.some((column) => column.name === "onchain_block_number")) db.exec("ALTER TABLE bookings ADD COLUMN onchain_block_number INTEGER");
   if (!bookingColumns.some((column) => column.name === "onchain_block_hash")) db.exec("ALTER TABLE bookings ADD COLUMN onchain_block_hash TEXT");
@@ -124,16 +127,21 @@ export function openAuthDatabase(databasePath = process.env.AUTH_DB_PATH || path
       verified_at TEXT NOT NULL
     );
   `);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS listings_equipment_serial ON listings(equipment_serial) WHERE equipment_serial IS NOT NULL AND equipment_serial <> ''");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS verified_onchain_transactions_booking_id ON verified_onchain_transactions(booking_id)");
-  const count = db.prepare("SELECT COUNT(*) AS count FROM listings").get() as { count: number };
-  if (count.count === 0) {
-    const now = new Date().toISOString();
-    const demo = db.prepare("SELECT id FROM users WHERE email = ?").get("demo-owner@eventrent.local") as { id: number } | undefined;
-    const ownerId = demo?.id ?? Number(db.prepare("INSERT INTO users (email, email_verified, created_at) VALUES (?, 1, ?)").run("demo-owner@eventrent.local", now).lastInsertRowid);
-    const insert = db.prepare("INSERT INTO listings (owner_id, name, category, description, image_url, condition, daily_fee, deposit, location, pickup_details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    insert.run(ownerId, "Compact Speaker System", "Sound", "Paired speakers for ceremonies, small stages, and private events.", null, "Good condition", "0.02", "0.08", "Local pickup", "Pickup details are arranged with the owner.", now, now);
-    insert.run(ownerId, "Venue Projector", "Projection", "Bright projection for presentations, screenings, and event visuals.", null, "Good condition", "0.03", "0.10", "Local pickup", "Pickup details are arranged with the owner.", now, now);
+  // Do not seed a sample catalogue. Remove the old local demo owner once so
+  // workspaces created by earlier versions start with an empty marketplace.
+  const legacyDemoOwner = db.prepare("SELECT id FROM users WHERE email = ?").get("demo-owner@eventrent.local") as { id: number } | undefined;
+  if (legacyDemoOwner) {
+    db.prepare("DELETE FROM bookings WHERE listing_id IN (SELECT id FROM listings WHERE owner_id = ?)").run(legacyDemoOwner.id);
+    db.prepare("DELETE FROM listings WHERE owner_id = ?").run(legacyDemoOwner.id);
+    db.prepare("DELETE FROM users WHERE id = ?").run(legacyDemoOwner.id);
   }
+  // Listings created before serial-ID validation were demonstration/legacy
+  // records. Remove them once so the marketplace only shows newly verified
+  // owner-created equipment.
+  db.prepare("DELETE FROM bookings WHERE listing_id IN (SELECT id FROM listings WHERE equipment_serial IS NULL OR equipment_serial = '')").run();
+  db.prepare("DELETE FROM listings WHERE equipment_serial IS NULL OR equipment_serial = ''").run();
   db.exec(`
     INSERT OR IGNORE INTO user_roles (user_id, role, created_at)
     SELECT id, 'renter', created_at FROM users;

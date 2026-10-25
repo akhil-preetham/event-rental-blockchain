@@ -28,7 +28,7 @@ sequenceDiagram
 
 | Concern | Authority |
 |---|---|
-| User, session, email verification | SQLite plus backend auth code |
+| Wallet user and session | SQLite plus backend wallet auth code |
 | Listing ownership and active flag | SQLite plus backend authorization |
 | Booking request and owner decision | SQLite plus backend transactions |
 | `createRental` evidence | Backend verification of the chain, then SQLite metadata |
@@ -81,10 +81,7 @@ stateDiagram-v2
 
 ## API groups
 
-- `/auth/register`, `/auth/login`, `/auth/session`, `/auth/logout`
-- `/auth/verify-email`, `/auth/verify-email/resend`
-- `/auth/password-reset/request`, `/auth/password-reset/confirm`
-- `/auth/nonce`, `/auth/verify`
+- `/auth/nonce`, `/auth/verify`, `/auth/session`, `/auth/role`, `/auth/logout`
 - `/api/listings`, `/api/listings/:id`, `/api/my/listings`
 - `/api/bookings`, `/api/bookings/:id`
 - `/api/bookings/:id/status`

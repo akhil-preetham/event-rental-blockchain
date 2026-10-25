@@ -7,17 +7,10 @@ const app = express();
 const port = Number(process.env.PORT || 8787);
 const origin = process.env.APP_ORIGIN?.trim() || "http://localhost:5173";
 const database = openAuthDatabase();
-let authRouter: express.Router;
-try {
-  authRouter = createAuthRouter(database);
-} catch (error) {
-  const detail = error instanceof Error ? error.message : "unknown_configuration_error";
-  console.error(`Email delivery configuration error: ${detail}. Configure SMTP_* variables or set EMAIL_DELIVERY_MODE=console only for development.`);
-  process.exit(1);
-}
+const authRouter: express.Router = createAuthRouter(database);
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "16kb" }));
+app.use(express.json({ limit: "2mb" }));
 app.use((request, response, next) => {
   const requestOrigin = request.get("origin");
   if (requestOrigin && requestOrigin !== origin) {
@@ -55,5 +48,5 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 });
 
 app.listen(port, () => {
-  console.log(`EventRent auth server listening on http://localhost:${port}`);
+  console.log(`EventRent wallet auth server listening on http://localhost:${port}`);
 });

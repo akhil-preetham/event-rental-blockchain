@@ -16,7 +16,17 @@ const validAmount = (value: unknown): value is string => {
     return false;
   }
 };
+const SERIAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{3,63}$/;
+const normalizeSerialId = (value: unknown): string => typeof value === "string" ? value.trim().toUpperCase() : "";
+const validSerialId = (value: unknown): value is string => typeof value === "string" && SERIAL_ID_PATTERN.test(value.trim());
+const validImage = (value: unknown): value is string | null => {
+  if (value === undefined || value === null || value === "") return true;
+  if (typeof value !== "string" || value.length > 1_000_000) return false;
+  return /^https?:\/\/\S+$/i.test(value) || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i.test(value);
+};
 const positiveInteger = (value: unknown): value is number => Number.isInteger(value) && Number(value) > 0;
+const vendorNameSql = "COALESCE(NULLIF(TRIM(u.email), ''), CASE WHEN u.wallet_address IS NOT NULL THEN 'Vendor ' || substr(u.wallet_address, 1, 6) || '…' || substr(u.wallet_address, -4) ELSE 'EventRent owner' END)";
+const listingFieldsSql = `l.id, l.name, l.category, l.description, l.image_url AS imageUrl, l.equipment_serial AS serialId, l.condition, l.daily_fee AS dailyFee, l.deposit, l.location, l.pickup_details AS pickupDetails, l.active, l.owner_id AS ownerId, u.wallet_address AS ownerWalletAddress, ${vendorNameSql} AS ownerName`;
 
 const decodeCookieValue = (value: string): string | null => {
   try {
@@ -55,19 +65,19 @@ export function createMarketplaceRouter(database: AuthDatabase, options: { verif
     const user = currentUser(database, request);
     if (!user) { response.status(401).json({ error: "authentication_required" }); return; }
     if (!requireRole(database, user.id, "owner", response)) return;
-    const listings = database.db.prepare("SELECT id, name, category, description, image_url AS imageUrl, condition, daily_fee AS dailyFee, deposit, location, pickup_details AS pickupDetails, active, created_at AS createdAt, updated_at AS updatedAt FROM listings WHERE owner_id = ? ORDER BY created_at DESC").all(user.id);
+    const listings = database.db.prepare(`SELECT ${listingFieldsSql}, l.created_at AS createdAt, l.updated_at AS updatedAt FROM listings l JOIN users u ON u.id = l.owner_id WHERE l.owner_id = ? ORDER BY l.created_at DESC`).all(user.id);
     response.json({ listings });
   });
   router.get("/listings", (request, response) => {
     const query = typeof request.query.q === "string" ? request.query.q.trim() : "";
     const category = typeof request.query.category === "string" ? request.query.category.trim() : "";
-    const rows = database.db.prepare("SELECT l.id, l.name, l.category, l.description, l.image_url AS imageUrl, l.condition, l.daily_fee AS dailyFee, l.deposit, l.location, l.pickup_details AS pickupDetails, l.active, l.owner_id AS ownerId, COALESCE(u.email, 'EventRent owner') AS ownerName FROM listings l JOIN users u ON u.id = l.owner_id WHERE l.active = 1 AND (? = '' OR l.name LIKE ? OR l.description LIKE ?) AND (? = '' OR l.category = ?) ORDER BY l.created_at DESC LIMIT 50").all(query, `%${query}%`, `%${query}%`, category, category);
+    const rows = database.db.prepare(`SELECT ${listingFieldsSql} FROM listings l JOIN users u ON u.id = l.owner_id WHERE l.active = 1 AND (? = '' OR l.name LIKE ? OR l.description LIKE ?) AND (? = '' OR l.category = ?) ORDER BY l.created_at DESC LIMIT 50`).all(query, `%${query}%`, `%${query}%`, category, category);
     response.json({ listings: rows });
   });
   router.get("/listings/:id", (request, response) => {
     const listingId = Number(request.params.id);
     if (!positiveInteger(listingId)) { response.status(400).json({ error: "invalid_listing_id" }); return; }
-    const listing = database.db.prepare("SELECT l.id, l.name, l.category, l.description, l.image_url AS imageUrl, l.condition, l.daily_fee AS dailyFee, l.deposit, l.location, l.pickup_details AS pickupDetails, l.active, l.owner_id AS ownerId, COALESCE(u.email, 'EventRent owner') AS ownerName FROM listings l JOIN users u ON u.id = l.owner_id WHERE l.id = ? AND l.active = 1").get(listingId);
+    const listing = database.db.prepare(`SELECT ${listingFieldsSql} FROM listings l JOIN users u ON u.id = l.owner_id WHERE l.id = ? AND l.active = 1`).get(listingId);
     if (!listing) { response.status(404).json({ error: "listing_not_found" }); return; }
     response.json({ listing });
   });
@@ -76,10 +86,14 @@ export function createMarketplaceRouter(database: AuthDatabase, options: { verif
     if (!user) { response.status(401).json({ error: "authentication_required" }); return; }
     if (!requireRole(database, user.id, "owner", response)) return;
     const body = request.body || {};
+    const serialId = normalizeSerialId(body.serialId);
+    if (!validSerialId(serialId)) { response.status(400).json({ error: "invalid_serial_id" }); return; }
     const fields = ["name", "category", "description", "condition", "dailyFee", "deposit", "location", "pickupDetails"] as const;
-    if (fields.some((field) => !validText(body[field], field === "description" ? 2000 : 240)) || !validAmount(body.dailyFee) || !validAmount(body.deposit)) { response.status(400).json({ error: "invalid_listing" }); return; }
+    if (fields.some((field) => !validText(body[field], field === "description" ? 2000 : 240)) || !validAmount(body.dailyFee) || !validAmount(body.deposit) || !validImage(body.imageUrl)) { response.status(400).json({ error: "invalid_listing" }); return; }
+    if (database.db.prepare("SELECT 1 FROM listings WHERE equipment_serial = ?").get(serialId)) { response.status(409).json({ error: "serial_id_already_registered" }); return; }
     const now = new Date().toISOString();
-    const result = database.db.prepare("INSERT INTO listings (owner_id, name, category, description, image_url, condition, daily_fee, deposit, location, pickup_details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(user.id, body.name.trim(), body.category.trim(), body.description.trim(), typeof body.imageUrl === "string" ? body.imageUrl.trim().slice(0, 1000) : null, body.condition.trim(), body.dailyFee.trim(), body.deposit.trim(), body.location.trim(), body.pickupDetails.trim(), now, now);
+    const imageUrl = typeof body.imageUrl === "string" && body.imageUrl.trim() ? body.imageUrl.trim() : null;
+    const result = database.db.prepare("INSERT INTO listings (owner_id, name, category, description, image_url, equipment_serial, condition, daily_fee, deposit, location, pickup_details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(user.id, body.name.trim(), body.category.trim(), body.description.trim(), imageUrl, serialId, body.condition.trim(), body.dailyFee.trim(), body.deposit.trim(), body.location.trim(), body.pickupDetails.trim(), now, now);
     response.status(201).json({ listingId: Number(result.lastInsertRowid) });
   });
   router.put("/listings/:id", (request, response) => {
@@ -92,12 +106,13 @@ export function createMarketplaceRouter(database: AuthDatabase, options: { verif
     if (!listing) { response.status(404).json({ error: "listing_not_found" }); return; }
     if (listing.ownerId !== user.id) { response.status(403).json({ error: "listing_owner_required" }); return; }
     const body = request.body || {};
-    const current = database.db.prepare("SELECT name, category, description, image_url AS imageUrl, condition, daily_fee AS dailyFee, deposit, location, pickup_details AS pickupDetails, active FROM listings WHERE id = ?").get(listingId) as { name: string; category: string; description: string; imageUrl: string | null; condition: string; dailyFee: string; deposit: string; location: string; pickupDetails: string; active: number };
+    const current = database.db.prepare("SELECT name, category, description, image_url AS imageUrl, equipment_serial AS serialId, condition, daily_fee AS dailyFee, deposit, location, pickup_details AS pickupDetails, active FROM listings WHERE id = ?").get(listingId) as { name: string; category: string; description: string; imageUrl: string | null; serialId: string | null; condition: string; dailyFee: string; deposit: string; location: string; pickupDetails: string; active: number };
     const values = {
       name: body.name === undefined ? current.name : body.name,
       category: body.category === undefined ? current.category : body.category,
       description: body.description === undefined ? current.description : body.description,
       imageUrl: body.imageUrl === undefined ? current.imageUrl : body.imageUrl,
+      serialId: body.serialId === undefined ? current.serialId : normalizeSerialId(body.serialId),
       condition: body.condition === undefined ? current.condition : body.condition,
       dailyFee: body.dailyFee === undefined ? current.dailyFee : body.dailyFee,
       deposit: body.deposit === undefined ? current.deposit : body.deposit,
@@ -105,9 +120,11 @@ export function createMarketplaceRouter(database: AuthDatabase, options: { verif
       pickupDetails: body.pickupDetails === undefined ? current.pickupDetails : body.pickupDetails,
       active: body.active === undefined ? current.active === 1 : body.active,
     };
-    const hasChanges = Object.keys(body).some((field) => ["name", "category", "description", "imageUrl", "condition", "dailyFee", "deposit", "location", "pickupDetails", "active"].includes(field));
-    if (!hasChanges || !validText(values.name, 240) || !validText(values.category, 240) || !validText(values.description, 2000) || !validText(values.condition, 240) || !validAmount(values.dailyFee) || !validAmount(values.deposit) || !validText(values.location, 240) || !validText(values.pickupDetails, 240) || (values.imageUrl !== null && (typeof values.imageUrl !== "string" || values.imageUrl.trim().length > 1000)) || typeof values.active !== "boolean") { response.status(400).json({ error: "invalid_listing" }); return; }
-    database.db.prepare("UPDATE listings SET name = ?, category = ?, description = ?, image_url = ?, condition = ?, daily_fee = ?, deposit = ?, location = ?, pickup_details = ?, active = ?, updated_at = ? WHERE id = ?").run(values.name.trim(), values.category.trim(), values.description.trim(), typeof values.imageUrl === "string" ? values.imageUrl.trim() : null, values.condition.trim(), values.dailyFee.trim(), values.deposit.trim(), values.location.trim(), values.pickupDetails.trim(), values.active ? 1 : 0, new Date().toISOString(), listingId);
+    const hasChanges = Object.keys(body).some((field) => ["name", "category", "description", "imageUrl", "serialId", "condition", "dailyFee", "deposit", "location", "pickupDetails", "active"].includes(field));
+    if (!hasChanges || !validSerialId(values.serialId || "") || !validText(values.name, 240) || !validText(values.category, 240) || !validText(values.description, 2000) || !validText(values.condition, 240) || !validAmount(values.dailyFee) || !validAmount(values.deposit) || !validText(values.location, 240) || !validText(values.pickupDetails, 240) || !validImage(values.imageUrl) || typeof values.active !== "boolean") { response.status(400).json({ error: "invalid_listing" }); return; }
+    if (database.db.prepare("SELECT 1 FROM listings WHERE equipment_serial = ? AND id != ?").get(values.serialId, listingId)) { response.status(409).json({ error: "serial_id_already_registered" }); return; }
+    const imageUrl = typeof values.imageUrl === "string" && values.imageUrl.trim() ? values.imageUrl.trim() : null;
+    database.db.prepare("UPDATE listings SET name = ?, category = ?, description = ?, image_url = ?, equipment_serial = ?, condition = ?, daily_fee = ?, deposit = ?, location = ?, pickup_details = ?, active = ?, updated_at = ? WHERE id = ?").run(values.name.trim(), values.category.trim(), values.description.trim(), imageUrl, values.serialId, values.condition.trim(), values.dailyFee.trim(), values.deposit.trim(), values.location.trim(), values.pickupDetails.trim(), values.active ? 1 : 0, new Date().toISOString(), listingId);
     response.json({ updated: true });
   });
   router.get("/bookings", (request, response) => {

@@ -1,15 +1,18 @@
 export type Listing = {
   id: number;
+  ownerId: number;
   name: string;
   category: string;
   description: string;
   imageUrl: string | null;
+  serialId: string | null;
   condition: string;
   dailyFee: string;
   deposit: string;
   location: string;
   pickupDetails: string;
   ownerName: string;
+  ownerWalletAddress: string | null;
   active?: number;
 };
 export type Booking = {
@@ -49,7 +52,7 @@ export async function createListing(input: Record<string, string>): Promise<numb
   return result.listingId;
 }
 
-export async function updateListing(listingId: number, input: Partial<Pick<Listing, "name" | "category" | "description" | "imageUrl" | "condition" | "dailyFee" | "deposit" | "location" | "pickupDetails">> & { active: boolean }): Promise<void> {
+export async function updateListing(listingId: number, input: Partial<Pick<Listing, "name" | "category" | "description" | "imageUrl" | "serialId" | "condition" | "dailyFee" | "deposit" | "location" | "pickupDetails">> & { active: boolean }): Promise<void> {
   await json(await fetch(`/api/listings/${listingId}`, {
     method: "PUT",
     credentials: "include",
@@ -58,9 +61,24 @@ export async function updateListing(listingId: number, input: Partial<Pick<Listi
   }));
 }
 
-export async function fetchBookings(): Promise<Booking[]> {
+async function requestBookings(): Promise<Booking[]> {
   const result = await json<{ bookings: Booking[] }>(await fetch("/api/bookings", { credentials: "include" }));
   return result.bookings;
+}
+
+export async function fetchBookings(): Promise<Booking[]> {
+  const bookings = await requestBookings();
+  const onchainBookings = bookings.filter((booking) => Boolean(booking.onchainRentalId && booking.transactionHash && booking.onchainVerificationStatus === "VERIFIED"));
+  if (!onchainBookings.length) return bookings;
+
+  // The booking API returns the last persisted escrow snapshot. Refresh each
+  // verified association before applying renter views such as Completed.
+  await Promise.allSettled(onchainBookings.map((booking) => reconcileOnchainRental(booking.id)));
+  try {
+    return await requestBookings();
+  } catch {
+    return bookings;
+  }
 }
 
 export async function createBooking(listingId: number, startTime: string, endTime: string): Promise<{ bookingId: number; status: string }> {
